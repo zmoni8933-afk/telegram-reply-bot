@@ -13,9 +13,9 @@ from aiogram.webhook.aiohttp_server import (
 )
 
 
-# ==========================================
+# =========================================================
 # ENVIRONMENT VARIABLES
-# ==========================================
+# =========================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID_RAW = os.getenv("ADMIN_ID")
@@ -42,31 +42,34 @@ except ValueError:
     raise RuntimeError("ADMIN_ID must be a number")
 
 
-# ==========================================
+# =========================================================
 # SETTINGS
-# ==========================================
+# =========================================================
 
 DB_NAME = "bot.db"
 
 WEBHOOK_PATH = "/telegram-webhook"
 
 WEBHOOK_URL = (
-    f"{RENDER_EXTERNAL_URL}{WEBHOOK_PATH}"
+    RENDER_EXTERNAL_URL.rstrip("/")
+    + WEBHOOK_PATH
 )
 
 
-# ==========================================
+# =========================================================
 # BOT
-# ==========================================
+# =========================================================
 
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(
+    token=BOT_TOKEN
+)
 
 dp = Dispatcher()
 
 
-# ==========================================
+# =========================================================
 # DATABASE
-# ==========================================
+# =========================================================
 
 async def init_db():
 
@@ -97,9 +100,28 @@ async def init_db():
         await db.commit()
 
 
-# ==========================================
-# USER FUNCTIONS
-# ==========================================
+# =========================================================
+# CHECK USER
+# =========================================================
+
+async def is_blocked(user_id: int):
+
+    async with aiosqlite.connect(DB_NAME) as db:
+
+        cursor = await db.execute("""
+            SELECT user_id
+            FROM blocked_users
+            WHERE user_id = ?
+        """, (user_id,))
+
+        row = await cursor.fetchone()
+
+        return row is not None
+
+
+# =========================================================
+# SAVE USER
+# =========================================================
 
 async def save_user(message: Message):
 
@@ -108,18 +130,12 @@ async def save_user(message: Message):
     if not user:
         return False
 
+    blocked = await is_blocked(user.id)
+
+    if blocked:
+        return False
+
     async with aiosqlite.connect(DB_NAME) as db:
-
-        cursor = await db.execute("""
-            SELECT user_id
-            FROM blocked_users
-            WHERE user_id = ?
-        """, (user.id,))
-
-        blocked = await cursor.fetchone()
-
-        if blocked:
-            return False
 
         await db.execute("""
             INSERT INTO users (
@@ -144,15 +160,21 @@ async def save_user(message: Message):
     return True
 
 
+# =========================================================
+# MANUALLY ADD USER
+# =========================================================
+
 async def manual_add_user(user_id: int):
 
     async with aiosqlite.connect(DB_NAME) as db:
 
+        # Remove from blocked list
         await db.execute("""
             DELETE FROM blocked_users
             WHERE user_id = ?
         """, (user_id,))
 
+        # Add user
         await db.execute("""
             INSERT OR IGNORE INTO users (
                 user_id,
@@ -169,15 +191,21 @@ async def manual_add_user(user_id: int):
         await db.commit()
 
 
+# =========================================================
+# MANUALLY REMOVE USER
+# =========================================================
+
 async def manual_remove_user(user_id: int):
 
     async with aiosqlite.connect(DB_NAME) as db:
 
+        # Remove from users
         await db.execute("""
             DELETE FROM users
             WHERE user_id = ?
         """, (user_id,))
 
+        # Block user
         await db.execute("""
             INSERT OR IGNORE INTO blocked_users (
                 user_id
@@ -185,6 +213,7 @@ async def manual_remove_user(user_id: int):
             VALUES (?)
         """, (user_id,))
 
+        # Remove old mappings
         await db.execute("""
             DELETE FROM message_map
             WHERE user_id = ?
@@ -193,12 +222,19 @@ async def manual_remove_user(user_id: int):
         await db.commit()
 
 
+# =========================================================
+# GET USERS
+# =========================================================
+
 async def get_users():
 
     async with aiosqlite.connect(DB_NAME) as db:
 
         cursor = await db.execute("""
-            SELECT user_id, name, username
+            SELECT
+                user_id,
+                name,
+                username
             FROM users
             ORDER BY added_at DESC
         """)
@@ -206,9 +242,9 @@ async def get_users():
         return await cursor.fetchall()
 
 
-# ==========================================
-# MESSAGE MAPPING
-# ==========================================
+# =========================================================
+# SAVE MESSAGE MAPPING
+# =========================================================
 
 async def save_mapping(
     admin_message_id: int,
@@ -231,6 +267,10 @@ async def save_mapping(
         await db.commit()
 
 
+# =========================================================
+# GET USER FROM ADMIN MESSAGE
+# =========================================================
+
 async def get_user_from_message(
     admin_message_id: int
 ):
@@ -245,12 +285,15 @@ async def get_user_from_message(
 
         row = await cursor.fetchone()
 
-        return row[0] if row else None
+        if row:
+            return row[0]
+
+        return None
 
 
-# ==========================================
+# =========================================================
 # MAIN MESSAGE HANDLER
-# ==========================================
+# =========================================================
 
 @dp.message()
 async def message_handler(message: Message):
@@ -261,18 +304,18 @@ async def message_handler(message: Message):
     sender_id = message.from_user.id
 
 
-    # ======================================
-    # ADMIN
-    # ======================================
+    # =====================================================
+    # ADMIN MESSAGE
+    # =====================================================
 
     if sender_id == ADMIN_ID:
 
         text = message.text or ""
 
 
-        # ==================================
+        # -------------------------------------------------
         # /adduser
-        # ==================================
+        # -------------------------------------------------
 
         if text.startswith("/adduser"):
 
@@ -288,6 +331,7 @@ async def message_handler(message: Message):
                 return
 
             try:
+
                 target_id = int(parts[1])
 
             except ValueError:
@@ -298,7 +342,9 @@ async def message_handler(message: Message):
 
                 return
 
+
             await manual_add_user(target_id)
+
 
             await message.answer(
                 "✅ User added.\n\n"
@@ -309,9 +355,9 @@ async def message_handler(message: Message):
             return
 
 
-        # ==================================
+        # -------------------------------------------------
         # /removeuser
-        # ==================================
+        # -------------------------------------------------
 
         if text.startswith("/removeuser"):
 
@@ -327,6 +373,7 @@ async def message_handler(message: Message):
                 return
 
             try:
+
                 target_id = int(parts[1])
 
             except ValueError:
@@ -337,7 +384,9 @@ async def message_handler(message: Message):
 
                 return
 
+
             await manual_remove_user(target_id)
+
 
             await message.answer(
                 "🗑️ User removed and blocked.\n\n"
@@ -348,9 +397,9 @@ async def message_handler(message: Message):
             return
 
 
-        # ==================================
+        # -------------------------------------------------
         # /users
-        # ==================================
+        # -------------------------------------------------
 
         if text.strip() == "/users":
 
@@ -364,9 +413,11 @@ async def message_handler(message: Message):
 
                 return
 
+
             lines = [
                 "👥 <b>Users</b>\n"
             ]
+
 
             for number, user in enumerate(
                 users,
@@ -382,14 +433,19 @@ async def message_handler(message: Message):
 
                 username = user[2]
 
+
                 if username:
+
                     username_text = (
                         f"@{username}"
                     )
+
                 else:
+
                     username_text = (
                         "No username"
                     )
+
 
                 lines.append(
                     f"{number}. "
@@ -398,14 +454,18 @@ async def message_handler(message: Message):
                     f"   🆔 <code>{uid}</code>\n"
                 )
 
+
             result = "\n".join(lines)
 
+
+            # Telegram message limit
             if len(result) > 4000:
 
                 result = (
                     result[:4000]
                     + "\n\n⚠️ List truncated."
                 )
+
 
             await message.answer(
                 result,
@@ -415,14 +475,18 @@ async def message_handler(message: Message):
             return
 
 
-        # ==================================
-        # ADMIN -> USER
-        # ==================================
+        # -------------------------------------------------
+        # ADMIN REPLY TO USER
+        # -------------------------------------------------
 
         if not message.reply_to_message:
 
             await message.answer(
-                "↩️ Reply to a user's forwarded message."
+                "↩️ Reply to a user's message.\n\n"
+                "Admin commands:\n"
+                "/adduser USER_ID\n"
+                "/removeuser USER_ID\n"
+                "/users"
             )
 
             return
@@ -432,11 +496,13 @@ async def message_handler(message: Message):
             message.reply_to_message.message_id
         )
 
+
         target_user_id = (
             await get_user_from_message(
                 replied_message_id
             )
         )
+
 
         if not target_user_id:
 
@@ -447,99 +513,20 @@ async def message_handler(message: Message):
             return
 
 
+        # -------------------------------------------------
+        # SEND ADMIN REPLY TO USER
+        # -------------------------------------------------
+
         try:
 
-            # TEXT
-            if message.text:
+            # copy_to supports Telegram message types
+            await message.copy_to(
+                chat_id=target_user_id
+            )
 
-                await bot.send_message(
-                    chat_id=target_user_id,
-                    text=message.text
-                )
-
-
-            # PHOTO
-            elif message.photo:
-
-                await bot.send_photo(
-                    chat_id=target_user_id,
-                    photo=message.photo[-1].file_id,
-                    caption=message.caption
-                )
-
-
-            # VIDEO
-            elif message.video:
-
-                await bot.send_video(
-                    chat_id=target_user_id,
-                    video=message.video.file_id,
-                    caption=message.caption
-                )
-
-
-            # DOCUMENT
-            elif message.document:
-
-                await bot.send_document(
-                    chat_id=target_user_id,
-                    document=message.document.file_id,
-                    caption=message.caption
-                )
-
-
-            # VOICE
-            elif message.voice:
-
-                await bot.send_voice(
-                    chat_id=target_user_id,
-                    voice=message.voice.file_id
-                )
-
-
-            # AUDIO
-            elif message.audio:
-
-                await bot.send_audio(
-                    chat_id=target_user_id,
-                    audio=message.audio.file_id,
-                    caption=message.caption
-                )
-
-
-            # STICKER
-            elif message.sticker:
-
-                await bot.send_sticker(
-                    chat_id=target_user_id,
-                    sticker=message.sticker.file_id
-                )
-
-
-            # GIF / ANIMATION
-            elif message.animation:
-
-                await bot.send_animation(
-                    chat_id=target_user_id,
-                    animation=message.animation.file_id,
-                    caption=message.caption
-                )
-
-
-            else:
-
-                await message.answer(
-                    "⚠️ This message type is not supported."
-                )
-
-                return
-
-
-            # This confirmation is sent ONLY to admin.
-            # User receives ONLY the actual reply.
 
             await message.answer(
-                "✅ Sent."
+                "✅ Reply sent."
             )
 
 
@@ -547,28 +534,34 @@ async def message_handler(message: Message):
 
             print(
                 "Admin -> User error:",
-                e
+                repr(e)
             )
+
 
             await message.answer(
                 "❌ Failed to send reply."
             )
 
+
         return
 
 
-    # ======================================
-    # USER -> ADMIN
-    # ======================================
+    # =====================================================
+    # USER MESSAGE
+    # =====================================================
 
     try:
 
+        # Check blocked + save user
         allowed = await save_user(message)
+
 
         if not allowed:
             return
 
+
         user = message.from_user
+
 
         username = (
             f"@{user.username}"
@@ -576,11 +569,16 @@ async def message_handler(message: Message):
             else "No username"
         )
 
+
         safe_name = html.escape(
             user.full_name
         )
 
-        # Send user information to admin
+
+        # -------------------------------------------------
+        # SEND USER INFO TO ADMIN
+        # -------------------------------------------------
+
         info = await bot.send_message(
 
             chat_id=ADMIN_ID,
@@ -588,7 +586,8 @@ async def message_handler(message: Message):
             text=(
                 "📩 <b>New User Message</b>\n\n"
 
-                f"👤 Name: {safe_name}\n"
+                f"👤 Name: "
+                f"{safe_name}\n"
 
                 f"🔹 Username: "
                 f"{html.escape(username)}\n"
@@ -596,24 +595,32 @@ async def message_handler(message: Message):
                 f"🆔 User ID: "
                 f"<code>{user.id}</code>\n\n"
 
-                "↩️ Reply to the forwarded message."
+                "↩️ Reply to this message "
+                "or the forwarded message."
             ),
 
             parse_mode="HTML"
         )
 
 
-        # Forward original message to admin
+        # -------------------------------------------------
+        # FORWARD ORIGINAL MESSAGE TO ADMIN
+        # -------------------------------------------------
+
         forwarded = await message.forward(
             chat_id=ADMIN_ID
         )
 
 
-        # Allow admin to reply to either message
+        # -------------------------------------------------
+        # SAVE BOTH MESSAGE IDs
+        # -------------------------------------------------
+
         await save_mapping(
             info.message_id,
             user.id
         )
+
 
         await save_mapping(
             forwarded.message_id,
@@ -621,17 +628,23 @@ async def message_handler(message: Message):
         )
 
 
+        print(
+            f"User message received: "
+            f"{user.id} -> Admin"
+        )
+
+
     except Exception as e:
 
         print(
             "User -> Admin error:",
-            e
+            repr(e)
         )
 
 
-# ==========================================
+# =========================================================
 # HEALTH CHECK
-# ==========================================
+# =========================================================
 
 async def health_check(request):
 
@@ -640,69 +653,32 @@ async def health_check(request):
     )
 
 
-# ==========================================
-# WEBHOOK SETUP
-# ==========================================
-
-async def set_webhook():
-
-    try:
-
-        await bot.set_webhook(
-            url=WEBHOOK_URL,
-            secret_token=WEBHOOK_SECRET
-        )
-
-        print(
-            "Webhook set successfully:",
-            WEBHOOK_URL
-        )
-
-    except Exception as e:
-
-        print(
-            "Webhook setup error:",
-            e
-        )
-
-
-# ==========================================
-# STARTUP
-# ==========================================
-
-async def on_startup():
-
-    await init_db()
-
-    # IMPORTANT:
-    # Do NOT wait for Telegram webhook setup here.
-    # Start it in background so Render can bind the port first.
-
-    asyncio.create_task(
-        set_webhook()
-    )
-
-
-# ==========================================
+# =========================================================
 # WEB APP
-# ==========================================
+# =========================================================
 
 app = web.Application()
 
 
-# Health check
 app.router.add_get(
     "/",
     health_check
 )
 
 
-# Telegram webhook
+# =========================================================
+# TELEGRAM WEBHOOK
+# =========================================================
+
 webhook_handler = SimpleRequestHandler(
+
     dispatcher=dp,
+
     bot=bot,
+
     secret_token=WEBHOOK_SECRET
 )
+
 
 webhook_handler.register(
     app,
@@ -710,7 +686,6 @@ webhook_handler.register(
 )
 
 
-# Connect aiogram with aiohttp
 setup_application(
     app,
     dp,
@@ -718,24 +693,64 @@ setup_application(
 )
 
 
-# Our startup function
-app.on_startup.append(
-    on_startup
-)
+# =========================================================
+# PREPARE BOT
+# =========================================================
+
+async def prepare_bot():
+
+    print("Initializing database...")
+
+    await init_db()
+
+    print(
+        "Setting webhook:",
+        WEBHOOK_URL
+    )
+
+    await bot.set_webhook(
+
+        url=WEBHOOK_URL,
+
+        secret_token=WEBHOOK_SECRET
+    )
+
+    print(
+        "Webhook set:",
+        WEBHOOK_URL
+    )
 
 
-# ==========================================
-# RUN
-# ==========================================
+# =========================================================
+# RUN SERVER
+# =========================================================
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "10000"))
 
-    print(f"Starting web server on 0.0.0.0:{port}")
+    asyncio.run(
+        prepare_bot()
+    )
+
+    port = int(
+        os.environ.get(
+            "PORT",
+            "10000"
+        )
+    )
+
+    print(
+        f"Starting web server "
+        f"on 0.0.0.0:{port}"
+    )
+
 
     web.run_app(
+
         app,
+
         host="0.0.0.0",
+
         port=port,
+
         access_log=None
     )
