@@ -722,14 +722,60 @@ async def prepare_bot():
 
 
 # =========================================================
+# STARTUP
+# =========================================================
+
+async def on_startup(app):
+
+    print("Initializing database...")
+
+    await init_db()
+
+    print(
+        "Setting webhook:",
+        WEBHOOK_URL
+    )
+
+    await bot.set_webhook(
+        url=WEBHOOK_URL,
+        secret_token=WEBHOOK_SECRET
+    )
+
+    print(
+        "Webhook set:",
+        WEBHOOK_URL
+    )
+
+
+# =========================================================
+# SHUTDOWN
+# =========================================================
+
+async def on_shutdown(app):
+
+    print("Shutting down bot...")
+
+    await bot.session.close()
+
+
+# =========================================================
+# REGISTER STARTUP / SHUTDOWN
+# =========================================================
+
+app.on_startup.append(
+    on_startup
+)
+
+app.on_cleanup.append(
+    on_shutdown
+)
+
+
+# =========================================================
 # RUN SERVER
 # =========================================================
 
 if __name__ == "__main__":
-
-    asyncio.run(
-        prepare_bot()
-    )
 
     port = int(
         os.environ.get(
@@ -743,14 +789,9 @@ if __name__ == "__main__":
         f"on 0.0.0.0:{port}"
     )
 
-
     web.run_app(
-
         app,
-
         host="0.0.0.0",
-
         port=port,
-
         access_log=None
     )
