@@ -729,20 +729,13 @@ app.on_startup.append(
 # ==========================================
 
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "10000"))
 
-    port = int(
-        os.getenv(
-            "PORT",
-            "10000"
-        )
-    )
-
-    print(
-        f"Starting web server on port {port}"
-    )
+    print(f"Starting web server on 0.0.0.0:{port}")
 
     web.run_app(
         app,
         host="0.0.0.0",
-        port=port
+        port=port,
+        access_log=None
     )
